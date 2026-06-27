@@ -1,0 +1,83 @@
+# LinkedIn AI Agent - Backend Dependencies
+
+# ============================================================================
+# Web Framework
+# ============================================================================
+fastapi==0.109.2
+uvicorn[standard]==0.27.1
+python-multipart==0.0.9
+pydantic==2.6.1
+pydantic-settings==2.1.0
+
+# ============================================================================
+# Database
+# ============================================================================
+asyncpg==0.29.0
+psycopg2-binary==2.9.9  # For Alembic
+psycopg[binary]>=3.1.0  # For LangGraph PostgresSaver
+sqlalchemy==2.0.27
+alembic==1.13.1
+
+# ============================================================================
+# LangChain / LangGraph
+# ============================================================================
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-groq>=0.2.0
+langgraph>=0.2.0
+langgraph-checkpoint-postgres>=3.0.0
+langsmith>=0.1.0
+
+# ============================================================================
+# LinkedIn Integration
+# ============================================================================
+# Official OAuth (when available)
+# linkedin-api-python==0.4.0  # Official client (if exists)
+
+# Unofficial Voyager (fallback) - for READ operations
+linkedin-api==2.0.0a5
+
+# Browser automation - for WRITE operations
+playwright==1.44.0
+playwright-stealth==2.0.3
+
+# ============================================================================
+# LLM APIs
+# ============================================================================
+openai==1.12.0  # OpenAI-compatible client (fallback)
+sarvamai>=0.1.27  # Sarvam AI native SDK (preferred)
+httpx>=0.27.0   # Async HTTP client
+groq>=0.9.0     # Groq client for fast classification
+
+# ============================================================================
+# Voice Services
+# ============================================================================
+# Sarvam AI SDK (if available, otherwise use httpx)
+# sarvamai==0.1.0
+
+# ============================================================================
+# Security
+# ============================================================================
+cryptography==42.0.2
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.1
+
+# ============================================================================
+# Utilities
+# ============================================================================
+structlog==24.1.0
+tenacity==8.2.3
+apscheduler==3.10.4
+
+# ============================================================================
+# Development
+# ============================================================================
+pytest>=8.4
+pytest-asyncio>=1.4.0
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+ruff==0.2.1
+black==24.1.1
+mypy==1.8.0
+pre-commit==3.6.0
