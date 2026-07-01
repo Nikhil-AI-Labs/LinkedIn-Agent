@@ -1,0 +1,1 @@
+accept_user_edit failed: Invalid variant selection: 1

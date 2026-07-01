@@ -18,8 +18,9 @@ class PostDraft(BaseModel):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    graph_run_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("graph_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    graph_run_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True,
+        comment="LangGraph thread_id (e.g. content_xxx_run_yyy)"
     )
 
     # Draft content
@@ -60,7 +61,6 @@ class PostDraft(BaseModel):
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="posts_drafted")
-    graph_run: Mapped["GraphRun"] = relationship(back_populates="posts_drafted")
 
     def __repr__(self) -> str:
         return f"<PostDraft(id={self.id}, status={self.status}, score={self.score})>"

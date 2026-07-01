@@ -44,13 +44,6 @@ class GraphRun(BaseModel):
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="graph_runs")
-    posts_drafted: Mapped[list["PostDraft"]] = relationship(
-        back_populates="graph_run", cascade="all, delete-orphan"
-    )
-    pending_engagements: Mapped[list["PendingEngagement"]] = relationship(
-        back_populates="graph_run", cascade="all, delete-orphan"
-    )
-    # Note: GraphCheckpoint is managed by LangGraph PostgresSaver, not by our models
 
     def __repr__(self) -> str:
         return f"<GraphRun(id={self.id}, graph_name={self.graph_name}, status={self.status})>"

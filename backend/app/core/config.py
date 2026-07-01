@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     groq_api_key: str
     groq_model: str = "llama-3.3-70b-versatile"
     
+    gemini_api_key: str
+    
     # Voice Service Configuration
     voice_max_upload_mb: int = 15
     voice_max_tts_chars: int = 1800
@@ -60,6 +62,8 @@ class Settings(BaseSettings):
     # IMPORTANT: LINKEDIN_PASSWORD_ENCRYPTED should be encrypted using encrypt_password.py script
     linkedin_username: str | None = None
     linkedin_password_encrypted: str | None = None
+    linkedin_public_id: str | None = None  # e.g. "nikhil-pathak-207737388" from linkedin.com/in/<ID>
+    playwright_headless: bool = True  # Set to False to solve captchas/2FA interactively
 
     # Observability
     langsmith_api_key: str | None = None
@@ -91,6 +95,7 @@ def validate_settings(settings: Settings) -> None:
         "database_url",
         "sarvam_api_key",
         "groq_api_key",
+        "gemini_api_key",
         "encryption_key",
         "jwt_secret",
     ]
@@ -177,3 +182,4 @@ settings = Settings()
 
 # Validate on import
 validate_settings(settings)
+# trigger reload 2

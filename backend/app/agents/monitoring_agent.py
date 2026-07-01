@@ -59,9 +59,9 @@ async def load_watchlist(
         watchlist_repo = WatchlistRepository(db)
         
         # Get active watchlist entries
-        entries = await watchlist_repo.get_user_watchlist(user_id)
+        entries = await watchlist_repo.get_for_user(user_id)
         
-        profile_ids = [entry.linkedin_profile_id for entry in entries]
+        profile_ids = [entry.target_member_id for entry in entries]
         
         state["watchlist_profile_ids"] = profile_ids
         state["status"] = "watchlist_loaded"
@@ -626,6 +626,7 @@ def build_monitoring_graph(checkpointer: PostgresSaver) -> StateGraph:
         {
             "approved": "post_engagement_or_skip",
             "rejected": "mark_result",  # Skip but still mark as rejected
+            "__end__": "mark_result",  # Unclear state, mark and end
         },
     )
     

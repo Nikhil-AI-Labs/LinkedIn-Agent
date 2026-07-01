@@ -20,37 +20,38 @@ class ChatHistoryRepository:
     
     async def create_message(
         self,
-        user_id: int,
+        user_id: str,
         thread_id: str,
         role: str,
         content: str,
         intent: str | None = None,
         metadata: dict[str, Any] | None = None,
         trace_id: str | None = None,
+        language: str | None = None,
+        source_mode: str | None = None,
     ) -> ChatMessage:
         """Create a new chat message.
         
         Args:
             user_id: User ID
-            thread_id: Thread/conversation ID
+            thread_id: Thread/conversation ID (logged but not stored in model)
             role: Message role (user, assistant, system)
             content: Message content
-            intent: Classified intent (optional)
-            metadata: Additional JSON metadata (optional)
-            trace_id: Trace ID for logging (optional)
+            intent: Classified intent (optional, logged but not stored in model)
+            metadata: Additional JSON metadata (optional, logged but not stored in model)
+            trace_id: Trace ID for logging (optional, not stored in model)
+            language: Language of the message (optional)
+            source_mode: Source mode (text, voice) (optional)
             
         Returns:
             Created ChatMessage instance
         """
         message = ChatMessage(
             user_id=user_id,
-            thread_id=thread_id,
             role=role,
-            content=content,
-            intent=intent,
-            metadata=metadata or {},
-            trace_id=trace_id,
-            created_at=datetime.utcnow(),
+            message_text=content,
+            language=language,
+            source_mode=source_mode,
         )
         
         self.db.add(message)
@@ -77,36 +78,28 @@ class ChatHistoryRepository:
     ) -> list[ChatMessage]:
         """List messages in a thread.
         
+        Note: Since thread_id is not stored in the model, this returns empty list.
+        Consider using get_recent_user_context for user-based history instead.
+        
         Args:
-            thread_id: Thread ID
+            thread_id: Thread ID (not used, for API compatibility)
             limit: Maximum number of messages to return
             before: Return messages before this timestamp (for pagination)
             
         Returns:
-            List of ChatMessage instances in reverse chronological order
+            Empty list (thread_id not stored in current model)
         """
-        query = select(ChatMessage).where(ChatMessage.thread_id == thread_id)
-        
-        if before:
-            query = query.where(ChatMessage.created_at < before)
-        
-        query = query.order_by(desc(ChatMessage.created_at)).limit(limit)
-        
-        result = await self.db.execute(query)
-        messages = result.scalars().all()
-        
-        logger.info(
-            "thread_messages_retrieved",
+        logger.warning(
+            "list_thread_messages called but thread_id not in model",
             thread_id=thread_id,
-            count=len(messages),
-            before=before.isoformat() if before else None,
         )
         
-        return list(messages)
+        # Return empty list since thread_id is not stored
+        return []
     
     async def get_recent_user_context(
         self,
-        user_id: int,
+        user_id: str,
         limit: int = 20,
     ) -> list[ChatMessage]:
         """Get recent conversation context for a user across all threads.
@@ -142,17 +135,19 @@ class ChatHistoryRepository:
     ) -> list[ChatMessage]:
         """Get all messages in a thread.
         
+        Note: Since thread_id is not stored in the model, this returns empty list.
+        Consider using get_recent_user_context for user-based history instead.
+        
         Args:
-            thread_id: Thread ID
+            thread_id: Thread ID (not used, for API compatibility)
             
         Returns:
-            List of ChatMessage instances
+            Empty list (thread_id not stored in current model)
         """
-        query = (
-            select(ChatMessage)
-            .where(ChatMessage.thread_id == thread_id)
-            .order_by(ChatMessage.created_at)
+        logger.warning(
+            "get_thread_by_id called but thread_id not in model",
+            thread_id=thread_id,
         )
         
-        result = await self.db.execute(query)
-        return list(result.scalars().all())
+        # Return empty list since thread_id is not stored
+        return []

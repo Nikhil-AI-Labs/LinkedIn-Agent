@@ -9,322 +9,142 @@ for personal use since it:
 """
 
 import asyncio
-import random
-from typing import Any
-from uuid import UUID
-
-from app.services.browser.browser_controller import BrowserController
+import json
+import uuid
+import websockets
+from typing import Any, Optional, Dict
 from app.core.logging import get_logger
+from app.services.browser.browser_controller import BrowserController
 
 logger = get_logger(__name__)
 
+class KimiBridgeServer:
+    """Python-native WebSocket server for Kimi WebBridge extension."""
+    _instance = None
+    
+    def __init__(self, port: int = 10086):
+        self.port = port
+        self.client_ws = None
+        self.pending_requests: Dict[str, asyncio.Future] = {}
+        self._server = None
+        self._lock = asyncio.Lock()
 
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    async def start(self):
+        async with self._lock:
+            if self._server is not None:
+                logger.debug("KimiBridgeServer already running, skipping start")
+                return
+            
+            logger.info(f"Starting KimiBridgeServer on ws://127.0.0.1:{self.port}/ws")
+            
+            try:
+                # websockets.serve supports the path argument if needed, but we can accept any path
+                self._server = await websockets.serve(self._handler, "127.0.0.1", self.port)
+                logger.info(f"✅ KimiBridgeServer successfully started on port {self.port}")
+            except OSError as e:
+                if e.errno == 10048:  # Windows: Address already in use
+                    logger.warning(f"Port {self.port} already in use - server may already be running from another instance")
+                    # Mark as started to prevent further attempts
+                    self._server = "already_running"
+                else:
+                    raise
+
+    async def _handler(self, websocket): # Removed path since websockets 10+ handles paths differently, and we just want to accept the connection
+        if self.client_ws is not None:
+            logger.warning("Another client tried to connect. Refusing.")
+            await websocket.close(code=4000, reason="Already connected")
+            return
+            
+        logger.info("✅ Kimi WebBridge extension connected!")
+        self.client_ws = websocket
+        
+        try:
+            async for message in websocket:
+                try:
+                    data = json.loads(message)
+                    msg_type = data.get("type")
+                    if msg_type == "hello":
+                        logger.info(f"Extension handshake received. Version: {data.get('payload', {}).get('extensionVersion')}")
+                        await websocket.send(json.dumps({"type": "hello_ack"}))
+                    elif msg_type == "tool_result":
+                        req_id = data.get("responseToRequestId")
+                        if req_id in self.pending_requests:
+                            if "error" in data.get("payload", {}):
+                                self.pending_requests[req_id].set_exception(Exception(data["payload"]["error"]))
+                            else:
+                                self.pending_requests[req_id].set_result(data.get("payload", {}).get("data", {}))
+                    elif msg_type == "ping":
+                        await websocket.send(json.dumps({"type": "pong"}))
+                except Exception as e:
+                    logger.error(f"Error handling message: {e}")
+        finally:
+            logger.warning("Kimi WebBridge extension disconnected")
+            self.client_ws = None
+            # Reject all pending requests
+            for fut in self.pending_requests.values():
+                if not fut.done():
+                    fut.set_exception(ConnectionError("Extension disconnected"))
+            self.pending_requests.clear()
+
+    async def execute_tool(self, name: str, args: dict, timeout: float = 30.0) -> Any:
+        """Send a tool call to the extension and wait for the result."""
+        if self.client_ws is None:
+            raise ConnectionError("Kimi WebBridge extension is not connected! Ensure Chrome is open and the extension is connected to ws://127.0.0.1:10086/ws")
+            
+        req_id = str(uuid.uuid4())
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self.pending_requests[req_id] = fut
+        
+        payload = {
+            "type": "tool_call",
+            "requestId": req_id,
+            "payload": {
+                "name": name,
+                "args": args
+            }
+        }
+        
+        logger.debug(f"Executing tool {name} with args {args}")
+        try:
+            await self.client_ws.send(json.dumps(payload))
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            fut.cancel()
+            raise TimeoutError(f"Tool {name} timed out after {timeout}s")
+        finally:
+            self.pending_requests.pop(req_id, None)
+
+# Keep the stub class around so imports don't break, but it won't be used
 class KimiBridgeController(BrowserController):
-    """Kimi WebBridge implementation of browser controller.
-
-    Uses Kimi WebBridge API to control the user's existing browser.
-    Requires Kimi WebBridge extension installed and running.
-
-    Status: STUB IMPLEMENTATION
-    This is a placeholder for the actual Kimi WebBridge integration.
-    Integration requires:
-    1. Kimi WebBridge API client library or HTTP client
-    2. WebSocket connection for real-time control
-    3. Command protocol implementation
-    """
-
     def __init__(self, bridge_url: str = "ws://localhost:7777") -> None:
-        """Initialize Kimi WebBridge controller.
-
-        Args:
-            bridge_url: WebSocket URL for Kimi WebBridge connection
-        """
         self.bridge_url = bridge_url
         self.connected = False
-        self.user_id: UUID | None = None
-
-    async def connect(self, user_id: UUID) -> dict[str, Any]:
-        """Connect to Kimi WebBridge.
-
-        Args:
-            user_id: User UUID (for logging/tracking only)
-
-        Returns:
-            Connection info dict
-
-        Raises:
-            ConnectionError: If connection fails
-        """
-        logger.info(
-            "Connecting to Kimi WebBridge",
-            user_id=str(user_id),
-            bridge_url=self.bridge_url,
-        )
-
-        # TODO: Implement actual Kimi WebBridge connection
-        # 1. Establish WebSocket connection to bridge_url
-        # 2. Send handshake/auth message
-        # 3. Verify connection successful
-        # 4. Store connection handle
-
-        # STUB: Simulate connection
-        await asyncio.sleep(0.1)
-        self.connected = True
-        self.user_id = user_id
-
-        logger.info("Kimi WebBridge connected", user_id=str(user_id))
-
-        return {
-            "status": "connected",
-            "provider": "kimi_webbridge",
-            "bridge_url": self.bridge_url,
-        }
-
+        self.user_id = None
+    async def connect(self, user_id: uuid.UUID) -> dict[str, Any]:
+        return {"status": "stub"}
     async def disconnect(self) -> None:
-        """Disconnect from Kimi WebBridge."""
-        if self.connected:
-            logger.info("Disconnecting from Kimi WebBridge", user_id=str(self.user_id))
-            # TODO: Close WebSocket connection
-            self.connected = False
-
+        pass
     async def is_authenticated(self) -> bool:
-        """Check if LinkedIn is authenticated in browser.
-
-        Returns:
-            True if authenticated (checks for LinkedIn session)
-        """
-        if not self.connected:
-            return False
-
-        # TODO: Implement LinkedIn auth check via Kimi WebBridge
-        # 1. Navigate to linkedin.com (if not already there)
-        # 2. Check for presence of user profile elements
-        # 3. Return True if logged in, False otherwise
-
-        # STUB: Assume authenticated for now
-        logger.info("Checking LinkedIn authentication via Kimi WebBridge")
+        return True
+    async def create_post(self, content: str, trace_id: str) -> dict[str, str]:
+        return {}
+    async def post_comment(self, post_url: str, comment_text: str, trace_id: str) -> dict[str, str]:
+        return {}
+    async def react_to_post(self, post_url: str, reaction_type: str, trace_id: str) -> dict[str, str]:
+        return {}
+    async def get_profile_posts(self, profile_url: str, limit: int, trace_id: str) -> list[dict[str, Any]]:
+        return []
+    async def get_post_comments(self, post_url: str, trace_id: str) -> list[dict[str, Any]]:
+        return []
+    async def get_my_posts(self, limit: int, trace_id: str) -> list[dict[str, Any]]:
+        return []
+    async def validate_profile_url(self, profile_url: str, trace_id: str) -> bool:
         return True
 
-    async def create_post(self, content: str, trace_id: str) -> dict[str, str]:
-        """Create LinkedIn post via browser automation.
-
-        Args:
-            content: Post text
-            trace_id: Trace ID for logging
-
-        Returns:
-            Dict with post_url and post_urn
-        """
-        if not self.connected:
-            raise ConnectionError("Not connected to Kimi WebBridge")
-
-        logger.info(
-            "Creating LinkedIn post via Kimi WebBridge",
-            trace_id=trace_id,
-            content_length=len(content),
-        )
-
-        # Apply human-like delay
-        delay = random.uniform(2.0, 7.0)
-        await asyncio.sleep(delay)
-
-        # TODO: Implement post creation via Kimi WebBridge
-        # 1. Navigate to LinkedIn home/feed
-        # 2. Click "Start a post" button
-        # 3. Type content with human-like delays
-        # 4. Click "Post" button
-        # 5. Wait for post to appear
-        # 6. Extract post URL
-
-        # STUB: Return placeholder
-        logger.warning(
-            "Kimi WebBridge post creation not implemented - returning stub",
-            trace_id=trace_id,
-        )
-        return {
-            "post_url": "https://www.linkedin.com/feed/update/urn:li:activity:stub",
-            "post_urn": "urn:li:activity:stub",
-        }
-
-    async def post_comment(
-        self, post_url: str, comment_text: str, trace_id: str
-    ) -> dict[str, str]:
-        """Post comment via browser automation.
-
-        Args:
-            post_url: LinkedIn post URL
-            comment_text: Comment text
-            trace_id: Trace ID
-
-        Returns:
-            Dict with comment_url and activity_urn
-        """
-        if not self.connected:
-            raise ConnectionError("Not connected to Kimi WebBridge")
-
-        logger.info(
-            "Posting comment via Kimi WebBridge",
-            trace_id=trace_id,
-            post_url=post_url,
-        )
-
-        # Apply human-like delay
-        delay = random.uniform(2.0, 7.0)
-        await asyncio.sleep(delay)
-
-        # TODO: Implement comment posting
-        # 1. Navigate to post_url
-        # 2. Click comment box
-        # 3. Type comment with delays
-        # 4. Click "Post" button
-        # 5. Extract comment URL
-
-        logger.warning("Kimi WebBridge comment posting not implemented", trace_id=trace_id)
-        return {
-            "comment_url": f"{post_url}?commentUrn=stub",
-            "activity_urn": "urn:li:comment:stub",
-        }
-
-    async def react_to_post(
-        self, post_url: str, reaction_type: str, trace_id: str
-    ) -> dict[str, str]:
-        """React to post via browser automation.
-
-        Args:
-            post_url: Post URL
-            reaction_type: Reaction (like, celebrate, support, insightful)
-            trace_id: Trace ID
-
-        Returns:
-            Dict with activity_urn
-        """
-        if not self.connected:
-            raise ConnectionError("Not connected to Kimi WebBridge")
-
-        logger.info(
-            "Reacting to post via Kimi WebBridge",
-            trace_id=trace_id,
-            post_url=post_url,
-            reaction_type=reaction_type,
-        )
-
-        # Apply human-like delay
-        delay = random.uniform(2.0, 7.0)
-        await asyncio.sleep(delay)
-
-        # TODO: Implement reaction
-        # 1. Navigate to post_url
-        # 2. Click appropriate reaction button
-        # 3. Confirm reaction applied
-
-        logger.warning("Kimi WebBridge reaction not implemented", trace_id=trace_id)
-        return {"activity_urn": "urn:li:reaction:stub"}
-
-    async def get_profile_posts(
-        self, profile_url: str, limit: int, trace_id: str
-    ) -> list[dict[str, Any]]:
-        """Fetch posts from profile.
-
-        Args:
-            profile_url: LinkedIn profile URL
-            limit: Max posts to fetch
-            trace_id: Trace ID
-
-        Returns:
-            List of post dicts
-        """
-        if not self.connected:
-            raise ConnectionError("Not connected to Kimi WebBridge")
-
-        logger.info(
-            "Fetching profile posts via Kimi WebBridge",
-            trace_id=trace_id,
-            profile_url=profile_url,
-            limit=limit,
-        )
-
-        # TODO: Implement post fetching
-        # 1. Navigate to profile_url
-        # 2. Scroll to load posts
-        # 3. Extract post data (content, url, timestamp)
-        # 4. Return list
-
-        logger.warning("Kimi WebBridge profile post fetching not implemented", trace_id=trace_id)
-        return []
-
-    async def get_post_comments(
-        self, post_url: str, trace_id: str
-    ) -> list[dict[str, Any]]:
-        """Fetch comments on post.
-
-        Args:
-            post_url: Post URL
-            trace_id: Trace ID
-
-        Returns:
-            List of comment dicts
-        """
-        if not self.connected:
-            raise ConnectionError("Not connected to Kimi WebBridge")
-
-        logger.info(
-            "Fetching post comments via Kimi WebBridge",
-            trace_id=trace_id,
-            post_url=post_url,
-        )
-
-        # TODO: Implement comment fetching
-
-        logger.warning("Kimi WebBridge comment fetching not implemented", trace_id=trace_id)
-        return []
-
-    async def get_my_posts(self, limit: int, trace_id: str) -> list[dict[str, Any]]:
-        """Fetch user's own posts.
-
-        Args:
-            limit: Max posts to fetch
-            trace_id: Trace ID
-
-        Returns:
-            List of post dicts
-        """
-        if not self.connected:
-            raise ConnectionError("Not connected to Kimi WebBridge")
-
-        logger.info(
-            "Fetching my posts via Kimi WebBridge",
-            trace_id=trace_id,
-            limit=limit,
-        )
-
-        # TODO: Implement my posts fetching
-
-        logger.warning("Kimi WebBridge my posts fetching not implemented", trace_id=trace_id)
-        return []
-
-    async def validate_profile_url(self, profile_url: str, trace_id: str) -> bool:
-        """Validate profile URL exists.
-
-        Args:
-            profile_url: Profile URL to validate
-            trace_id: Trace ID
-
-        Returns:
-            True if valid
-        """
-        if not self.connected:
-            raise ConnectionError("Not connected to Kimi WebBridge")
-
-        logger.info(
-            "Validating profile URL via Kimi WebBridge",
-            trace_id=trace_id,
-            profile_url=profile_url,
-        )
-
-        # TODO: Implement profile validation
-        # 1. Navigate to profile_url
-        # 2. Check for 404 or valid profile page
-        # 3. Return result
-
-        logger.warning("Kimi WebBridge profile validation not implemented", trace_id=trace_id)
-        return True  # Stub: assume valid

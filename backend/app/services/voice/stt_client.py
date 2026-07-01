@@ -182,6 +182,10 @@ class SarvamSTTClient:
             )
             raise STTProviderError(f"Sarvam STT request failed: {e}")
         
+        except STTProviderError:
+            # Don't re-wrap STTProviderError - let it bubble up
+            raise
+        
         except Exception as e:
             logger.error(
                 "stt_unexpected_error",

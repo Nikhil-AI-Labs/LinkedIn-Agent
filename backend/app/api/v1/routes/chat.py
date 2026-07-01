@@ -16,6 +16,7 @@ from app.schemas.responses import (
 )
 from app.services.chat_service import ChatService
 from app.services.voice import get_voice_manager, VoiceLanguage
+from app.services.voice.errors import AudioValidationError, STTProviderError
 from app.core.dependencies import get_db_session, get_current_user_id, get_trace_id, get_checkpointer
 from app.core.logging import get_logger
 
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 async def chat(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
     trace_id: str = Depends(get_trace_id),
     checkpointer = Depends(get_checkpointer),
 ) -> ChatResponse:
@@ -58,6 +59,8 @@ async def chat(
         message=request.message,
         thread_id=request.thread_id,
         trace_id=trace_id,
+        language=request.language,
+        source_mode="text",  # Default to text; voice transcription would set this to "voice"
     )
     
     # If voice enabled and response has message, add TTS
@@ -103,7 +106,7 @@ async def chat(
 @router.post("/voice/transcribe", response_model=VoiceTranscribeResponse)
 async def transcribe_voice(
     request: VoiceTranscribeRequest,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
     trace_id: str = Depends(get_trace_id),
 ) -> VoiceTranscribeResponse:
     """Transcribe audio to text using Sarvam STT."""
@@ -136,6 +139,43 @@ async def transcribe_voice(
             confidence=result.confidence,
         )
     
+    except AudioValidationError as e:
+        logger.warning(
+            "voice_transcribe_validation_error",
+            error=str(e),
+            trace_id=trace_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    
+    except STTProviderError as e:
+        error_msg = str(e).lower()
+        
+        # Check if it's a duration error from API
+        if "duration" in error_msg and ("exceeds" in error_msg or "30" in error_msg or "limit" in error_msg):
+            logger.warning(
+                "voice_transcribe_duration_exceeded",
+                error=str(e),
+                trace_id=trace_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Audio duration exceeds the maximum limit of 30 seconds. Please record a shorter audio clip (under 25 seconds).",
+            )
+        
+        # Other STT errors
+        logger.error(
+            "voice_transcribe_stt_error",
+            error=str(e),
+            trace_id=trace_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Transcription service error: {str(e)}",
+        )
+    
     except Exception as e:
         logger.error(
             "voice_transcribe_error",
@@ -151,7 +191,7 @@ async def transcribe_voice(
 @router.post("/voice/speak", response_model=VoiceSpeakResponse)
 async def synthesize_speech(
     request: VoiceSpeakRequest,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
     trace_id: str = Depends(get_trace_id),
 ) -> VoiceSpeakResponse:
     """Synthesize text to speech using Sarvam TTS."""

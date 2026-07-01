@@ -68,9 +68,9 @@ class VoiceSpeakResponse(BaseModel):
 class PendingItem(BaseModel):
     """Single pending item in list."""
     
-    id: int
+    id: str  # UUID as string
     type: str  # "draft" | "engagement"
-    thread_id: str
+    thread_id: str | None  # Can be None if not yet assigned
     status: str
     created_at: str  # ISO 8601
     data: dict[str, Any]

@@ -10,19 +10,19 @@ LANGUAGE_MAP = {
     VoiceLanguage.EN: {
         "tts_lang": "en-IN",
         "stt_lang": "en-IN",
-        "tts_speaker": "meera",  # Default English speaker
+        "tts_speaker": "priya",  # Default English speaker (female, natural) - compatible with bulbul:v3
         "codemix": False,
     },
     VoiceLanguage.HI: {
         "tts_lang": "hi-IN",
         "stt_lang": "hi-IN",
-        "tts_speaker": "arvind",  # Default Hindi speaker
+        "tts_speaker": "amit",  # Default Hindi speaker (male, natural)
         "codemix": False,
     },
     VoiceLanguage.HINGLISH: {
         "tts_lang": "hi-IN",  # Use Hindi for Hinglish
         "stt_lang": "hi-IN",
-        "tts_speaker": "arvind",
+        "tts_speaker": "neha",  # Compatible Hinglish speaker with bulbul:v3
         "codemix": True,  # Enable codemixing
     },
 }

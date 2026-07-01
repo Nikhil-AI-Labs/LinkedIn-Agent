@@ -31,7 +31,7 @@ class PendingEngagementRepository:
     async def create(
         self,
         user_id: UUID,
-        graph_run_id: UUID | None,
+        graph_run_id: str | None,
         action_type: str,
         target_post_url: str,
         suggested_content: str | None = None,
@@ -41,7 +41,7 @@ class PendingEngagementRepository:
 
         Args:
             user_id: User UUID
-            graph_run_id: Optional graph run UUID
+            graph_run_id: Optional LangGraph thread_id string
             action_type: Action type (like, comment, etc.)
             target_post_url: LinkedIn post URL to engage with
             suggested_content: Optional suggested comment text
@@ -107,11 +107,11 @@ class PendingEngagementRepository:
         )
         return list(result.scalars().all())
 
-    async def get_by_graph_run_id(self, graph_run_id: UUID) -> list[PendingEngagement]:
+    async def get_by_graph_run_id(self, graph_run_id: str) -> list[PendingEngagement]:
         """Get all engagements for a graph run.
 
         Args:
-            graph_run_id: Graph run UUID
+            graph_run_id: LangGraph thread_id string
 
         Returns:
             List of PendingEngagement instances

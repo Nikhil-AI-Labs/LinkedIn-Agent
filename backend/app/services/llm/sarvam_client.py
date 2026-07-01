@@ -73,12 +73,12 @@ class SarvamClient(BaseLLMClient):
                 # Native SDK or OpenAI SDK
                 choice = response.choices[0]
                 if hasattr(choice, 'message'):
-                    # Check for reasoning_content first (sarvam-105b reasoning model)
                     message = choice.message
-                    if hasattr(message, 'reasoning_content') and message.reasoning_content:
-                        content = message.reasoning_content
-                    elif message.content:
+                    # sarvam-105b sometimes returns empty content and puts the whole response in reasoning_content
+                    if message.content:
                         content = message.content
+                    elif hasattr(message, 'reasoning_content') and message.reasoning_content:
+                        content = message.reasoning_content
                     else:
                         content = ""
                 else:

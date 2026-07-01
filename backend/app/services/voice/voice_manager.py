@@ -16,6 +16,7 @@ from app.services.voice.audio_utils import (
     validate_audio_upload,
     save_temp_audio,
     cleanup_temp_audio,
+    validate_audio_duration,
 )
 from app.services.voice.errors import (
     VoiceError,
@@ -94,6 +95,9 @@ class VoiceManager:
         temp_path = await save_temp_audio(audio_bytes, content_type)
         
         try:
+            # Validate audio duration (30 second limit)
+            validate_audio_duration(temp_path)
+            
             # Transcribe
             result = await self.stt_client.transcribe_file(
                 audio_path=temp_path,

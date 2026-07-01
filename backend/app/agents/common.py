@@ -154,7 +154,7 @@ def route_on_approval(state: dict[str, Any]) -> str:
     """Conditional edge router for approval flows.
     
     Returns:
-        "approved" | "rejected" | END
+        "approved" | "rejected" | "__end__"
     """
     if is_approved(state):
         return "approved"
@@ -167,7 +167,7 @@ def route_on_approval(state: dict[str, Any]) -> str:
             approved=state.get("approved"),
             trace_id=state.get("trace_id"),
         )
-        return END
+        return "__end__"
 
 
 def route_on_error(state: dict[str, Any]) -> str:

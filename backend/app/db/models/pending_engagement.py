@@ -17,8 +17,9 @@ class PendingEngagement(BaseModel):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    graph_run_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("graph_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    graph_run_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True,
+        comment="LangGraph thread_id (e.g. monitoring_xxx_run_yyy)"
     )
 
     source_type: Mapped[str] = mapped_column(
@@ -49,7 +50,6 @@ class PendingEngagement(BaseModel):
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="pending_engagements")
-    graph_run: Mapped["GraphRun"] = relationship(back_populates="pending_engagements")
 
     def __repr__(self) -> str:
         return f"<PendingEngagement(id={self.id}, action_type={self.action_type}, status={self.status})>"

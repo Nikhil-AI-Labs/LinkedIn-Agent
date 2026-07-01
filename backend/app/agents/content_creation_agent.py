@@ -129,22 +129,39 @@ async def generate_drafts(state: ContentCreationState) -> ContentCreationState:
             LLMMessage(
                 role="system",
                 content=(
-                    "You are an expert LinkedIn content creator. Write engaging, professional posts "
-                    "that spark conversation and provide value. Keep posts concise (150-300 words). "
-                    f"Generate {num_variants} different variants with varying hooks and styles."
+                    "You are a LinkedIn content writer. Your job is to write the FINAL, READY-TO-POST content.\n\n"
+                    "CRITICAL RULES:\n"
+                    "- Write ONLY the post text that will be published\n"
+                    "- DO NOT write planning statements like 'I will focus on' or 'I'll write about'\n"
+                    "- DO NOT include meta-commentary about what you're doing\n"
+                    "- DO NOT explain your approach or reasoning\n"
+                    "- START IMMEDIATELY with the actual post content\n"
+                    "- Each post must be 150-300 words\n"
+                    "- Use short paragraphs for readability\n"
+                    "- Include 3-5 relevant hashtags at the end\n"
+                    "- End with an engaging question\n\n"
+                    "BAD EXAMPLE (DO NOT DO THIS):\n"
+                    "\"I'll focus on AI agents and how they're transforming...\"\n\n"
+                    "GOOD EXAMPLE (DO THIS):\n"
+                    "\"AI agents are revolutionizing the workplace. Last quarter, companies using...\""
                 ),
             ),
             LLMMessage(
                 role="user",
                 content=(
-                    f"Create {num_variants} LinkedIn post variants about: {brief['topic']}\n"
+                    f"Write {num_variants} DIFFERENT LinkedIn posts.\n\n"
+                    f"Topic: {brief['topic']}\n"
                     f"Tone: {brief['tone']}\n"
                     f"Audience: {brief['audience']}\n"
                     f"Include CTA: {brief['cta_required']}\n\n"
-                    f"Format each variant as:\n"
-                    f"VARIANT 1:\n[post text]\n\n"
-                    f"VARIANT 2:\n[post text]\n\n"
-                    f"VARIANT 3:\n[post text]"
+                    f"CRITICAL: Write the ACTUAL post content. Do NOT write planning statements.\n\n"
+                    f"Format:\n"
+                    f"VARIANT 1:\n"
+                    f"[Start directly with the post. No explanations. No 'I will focus on']\n\n"
+                    f"VARIANT 2:\n"
+                    f"[Start directly with the post. No explanations. No 'I will focus on']\n\n"
+                    f"VARIANT 3:\n"
+                    f"[Start directly with the post. No explanations. No 'I will focus on']"
                 ),
             ),
         ]
@@ -159,6 +176,16 @@ async def generate_drafts(state: ContentCreationState) -> ContentCreationState:
         
         # Parse variants
         content = response.content
+        
+        # Clean up meta-commentary that Sarvam sometimes generates
+        import re
+        # Remove thinking/reasoning patterns
+        content = re.sub(r'\*\*Deconstruct.*?\*\*', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'\*\*Role:.*?\*\*', '', content, flags=re.IGNORECASE)
+        content = re.sub(r'\*\*Task:.*?\*\*', '', content, flags=re.IGNORECASE)
+        content = re.sub(r'^\s*\d+\.\s+\*\*.*?\*\*.*?$', '', content, flags=re.MULTILINE)
+        content = re.sub(r'^\s*\*\s+\*\*.*?\*\*.*?$', '', content, flags=re.MULTILINE)
+        
         variants = []
         
         # Simple parsing - split by "VARIANT"
@@ -169,7 +196,17 @@ async def generate_drafts(state: ContentCreationState) -> ContentCreationState:
             # Clean up
             text = text.split("VARIANT")[0].strip()  # Remove next variant marker
             
-            if text:
+            # Remove lines starting with "I'll", "I will", "I plan"
+            cleaned_lines = []
+            for line in text.split("\n"):
+                line = line.strip()
+                if line and not line.startswith("I'll") and not line.startswith("I will") and not line.startswith("I plan"):
+                    cleaned_lines.append(line)
+            
+            text = "\n".join(cleaned_lines).strip()
+            
+            # Only include if meaningful content (>50 chars)
+            if text and len(text) > 50:
                 variants.append({
                     "variant_number": i,
                     "content": text,
@@ -178,11 +215,16 @@ async def generate_drafts(state: ContentCreationState) -> ContentCreationState:
         
         # If parsing failed, create single draft from full response
         if not variants:
-            variants = [{
-                "variant_number": 1,
-                "content": content,
-                "word_count": len(content.split()),
-            }]
+            # Try to extract meaningful content from response
+            cleaned_content = content.strip()
+            if len(cleaned_content) > 50:
+                variants = [{
+                    "variant_number": 1,
+                    "content": cleaned_content,
+                    "word_count": len(cleaned_content.split()),
+                }]
+            else:
+                raise ValueError("LLM generated no meaningful content after cleaning")
         
         state["drafts"] = variants
         state["status"] = "drafts_generated"
@@ -283,31 +325,36 @@ async def persist_drafts(
             "persist_drafts",
         )
         
-        user_id = state["user_id"]
+        from uuid import UUID
+        
+        user_id = UUID(str(state["user_id"])) if not isinstance(state["user_id"], UUID) else state["user_id"]
         drafts = state["drafts"]
         brief = state.get("brief", {})
+        user_input = state.get("user_input", "")
         
         draft_repo = DraftRepository(db)
         
-        # Create draft entry
-        # Store all variants as JSON in a single row
-        draft_data = {
-            "user_id": user_id,
-            "brief": json.dumps(brief),
-            "variants": json.dumps(drafts),
-            "status": DraftStatus.PENDING,
-            "trace_id": state["trace_id"],
-        }
+        # Create draft entries - one for each variant
+        draft_ids = []
+        for draft in drafts:
+            draft_record = await draft_repo.create(
+                user_id=user_id,
+                graph_run_id=state.get("thread_id"),
+                idea_input=user_input or json.dumps(brief),
+                draft_text=draft["content"],
+                variant_index=draft["variant_number"],
+                score=int(draft.get("score", 0) * 10) if draft.get("score") else None,  # Convert 0-10 to 0-100
+            )
+            draft_ids.append(draft_record.id)
         
-        draft = await draft_repo.create(draft_data)
-        
-        state["draft_id"] = draft.id
+        state["draft_ids"] = [str(did) for did in draft_ids]
+        state["draft_id"] = str(draft_ids[0]) if draft_ids else None  # Keep first for backwards compat
         state["status"] = "drafts_persisted"
         state["updated_at"] = datetime.utcnow()
         
         logger.info(
             "drafts_persisted",
-            draft_id=draft.id,
+            draft_ids=state["draft_ids"],
             num_variants=len(drafts),
             trace_id=state["trace_id"],
         )
@@ -323,11 +370,14 @@ async def interrupt_for_selection(state: ContentCreationState) -> ContentCreatio
     """Interrupt graph for user to select or edit a draft."""
     log_node_entry("interrupt_for_selection", state)
     
-    state = interrupt_for_approval(
-        state,
-        reason=InterruptReason.DRAFT_SELECTION,
-        node_name="interrupt_for_selection",
-    )
+    # Only set approval_required=True if we haven't been resumed yet.
+    # If approved is already set (True/False), the graph was resumed — don't reset it.
+    if state.get("approved") is None:
+        state = interrupt_for_approval(
+            state,
+            reason=InterruptReason.DRAFT_SELECTION,
+            node_name="interrupt_for_selection",
+        )
     
     state["status"] = "awaiting_selection"
     
@@ -348,7 +398,7 @@ async def accept_user_edit(state: ContentCreationState) -> ContentCreationState:
             variant_num = state["selected_draft_id"]
             drafts = state.get("drafts", [])
             selected = next(
-                (d for d in drafts if d["variant_number"] == variant_num),
+                (d for d in drafts if str(d.get("variant_number")) == str(variant_num)),
                 None,
             )
             if selected:
@@ -373,8 +423,11 @@ async def accept_user_edit(state: ContentCreationState) -> ContentCreationState:
         state["final_content"] = final_content
         state["status"] = "content_finalized"
         state["updated_at"] = datetime.utcnow()
+        state["approved"] = None
         
     except Exception as e:
+        with open("C:/Users/Nikhil1616/OneDrive/Desktop/LinkedIn/backend/debug_accept.txt", "w") as f:
+            f.write(f"accept_user_edit failed: {str(e)}")
         state = handle_node_error(state, "accept_user_edit", e)
     
     log_node_exit("accept_user_edit", state)
@@ -382,14 +435,18 @@ async def accept_user_edit(state: ContentCreationState) -> ContentCreationState:
 
 
 async def final_approval_interrupt(state: ContentCreationState) -> ContentCreationState:
-    """Final approval before posting to LinkedIn."""
+    """Final approval interrupt before posting."""
     log_node_entry("final_approval_interrupt", state)
     
-    state = interrupt_for_approval(
-        state,
-        reason=InterruptReason.FINAL_APPROVAL,
-        node_name="final_approval_interrupt",
-    )
+    # Only set approval_required=True if we haven't been resumed yet.
+    # If approved is already True (resumed by user), preserve it so the router
+    # correctly proceeds to post_to_linkedin instead of routing to __end__.
+    if state.get("approved") is None:
+        state = interrupt_for_approval(
+            state,
+            reason=InterruptReason.FINAL_APPROVAL,
+            node_name="final_approval_interrupt",
+        )
     
     state["status"] = "awaiting_final_approval"
     
@@ -430,7 +487,10 @@ async def post_to_linkedin(state: ContentCreationState) -> ContentCreationState:
             trace_id=state["trace_id"],
         )
         
-        post_id = result.post_id
+        if not result.success:
+            raise Exception(result.error or "Failed to create post")
+            
+        post_id = str(result.data) if result.data else None
         
         state["post_id"] = post_id
         state["status"] = "posted"
@@ -447,6 +507,8 @@ async def post_to_linkedin(state: ContentCreationState) -> ContentCreationState:
         )
         
     except Exception as e:
+        with open("C:/Users/Nikhil1616/OneDrive/Desktop/LinkedIn/backend/debug_post.txt", "w") as f:
+            f.write(f"post_to_linkedin failed: {str(e)}\nSTATE: {state}")
         state = handle_node_error(state, "post_to_linkedin", e)
     
     log_node_exit("post_to_linkedin", state)
@@ -473,6 +535,10 @@ async def mark_posted_or_failed(
             await draft_repo.update_status(draft_id, DraftStatus.FAILED)
             logger.info("draft_marked_failed", draft_id=draft_id, trace_id=state["trace_id"])
         elif state.get("post_id"):
+            # Mark as approved first if it's currently drafted
+            draft = await draft_repo.get_by_id(draft_id)
+            if draft and draft.status == DraftStatus.DRAFTED.value:
+                await draft_repo.update_status(draft_id, DraftStatus.APPROVED)
             # Mark as posted
             await draft_repo.update_status(draft_id, DraftStatus.POSTED)
             logger.info("draft_marked_posted", draft_id=draft_id, trace_id=state["trace_id"])
@@ -493,37 +559,45 @@ async def mark_posted_or_failed(
 # Graph Construction
 # ============================================================================
 
-def build_content_creation_graph(checkpointer: PostgresSaver) -> StateGraph:
-    """Build the content creation workflow graph.
+def route_on_error(state: ContentCreationState, next_node: str) -> str:
+    """Route to END if there is an error, otherwise continue."""
+    if state.get("error"):
+        return END
+    return next_node
+
+def build_content_creation_graph(
+    checkpointer: PostgresSaver,
+    db: AsyncSession,
+) -> StateGraph:
+    """Build the content creation workflow graph."""
+    from functools import partial
     
-    Args:
-        checkpointer: PostgresSaver instance for state persistence
-        
-    Returns:
-        Compiled StateGraph ready for execution
-    """
     # Create graph
     workflow = StateGraph(ContentCreationState)
+    
+    # Bind db session to nodes that need it
+    persist_drafts_with_db = partial(persist_drafts, db=db)
+    mark_posted_or_failed_with_db = partial(mark_posted_or_failed, db=db)
     
     # Add nodes
     workflow.add_node("parse_request", parse_request)
     workflow.add_node("generate_drafts", generate_drafts)
     workflow.add_node("evaluate_drafts", evaluate_drafts)
-    workflow.add_node("persist_drafts", persist_drafts)
+    workflow.add_node("persist_drafts", persist_drafts_with_db)
     workflow.add_node("interrupt_for_selection", interrupt_for_selection)
     workflow.add_node("accept_user_edit", accept_user_edit)
     workflow.add_node("final_approval_interrupt", final_approval_interrupt)
     workflow.add_node("post_to_linkedin", post_to_linkedin)
-    workflow.add_node("mark_posted_or_failed", mark_posted_or_failed)
+    workflow.add_node("mark_posted_or_failed", mark_posted_or_failed_with_db)
     
     # Set entry point
     workflow.set_entry_point("parse_request")
     
-    # Add edges
-    workflow.add_edge("parse_request", "generate_drafts")
-    workflow.add_edge("generate_drafts", "evaluate_drafts")
-    workflow.add_edge("evaluate_drafts", "persist_drafts")
-    workflow.add_edge("persist_drafts", "interrupt_for_selection")
+    # Add conditional edges to handle errors
+    workflow.add_conditional_edges("parse_request", partial(route_on_error, next_node="generate_drafts"), {"generate_drafts": "generate_drafts", END: END})
+    workflow.add_conditional_edges("generate_drafts", partial(route_on_error, next_node="evaluate_drafts"), {"evaluate_drafts": "evaluate_drafts", END: END})
+    workflow.add_conditional_edges("evaluate_drafts", partial(route_on_error, next_node="persist_drafts"), {"persist_drafts": "persist_drafts", END: END})
+    workflow.add_conditional_edges("persist_drafts", partial(route_on_error, next_node="interrupt_for_selection"), {"interrupt_for_selection": "interrupt_for_selection", END: END})
     
     # Conditional: after draft selection
     workflow.add_conditional_edges(
@@ -532,10 +606,11 @@ def build_content_creation_graph(checkpointer: PostgresSaver) -> StateGraph:
         {
             "approved": "accept_user_edit",
             "rejected": END,  # User cancelled
+            "__end__": END,  # Unclear state, end workflow
         },
     )
     
-    workflow.add_edge("accept_user_edit", "final_approval_interrupt")
+    workflow.add_conditional_edges("accept_user_edit", partial(route_on_error, next_node="final_approval_interrupt"), {"final_approval_interrupt": "final_approval_interrupt", END: END})
     
     # Conditional: after final approval
     workflow.add_conditional_edges(
@@ -544,10 +619,11 @@ def build_content_creation_graph(checkpointer: PostgresSaver) -> StateGraph:
         {
             "approved": "post_to_linkedin",
             "rejected": END,  # User cancelled
+            "__end__": END,  # Unclear state, end workflow
         },
     )
     
-    workflow.add_edge("post_to_linkedin", "mark_posted_or_failed")
+    workflow.add_conditional_edges("post_to_linkedin", partial(route_on_error, next_node="mark_posted_or_failed"), {"mark_posted_or_failed": "mark_posted_or_failed", END: END})
     workflow.add_edge("mark_posted_or_failed", END)
     
     # Compile with checkpointer
@@ -599,8 +675,8 @@ async def start_content_creation(
         "updated_at": datetime.utcnow(),
     }
     
-    # Build graph
-    graph = build_content_creation_graph(checkpointer)
+    # Build graph with db session
+    graph = build_content_creation_graph(checkpointer, db)
     
     # Execute until first interrupt
     config = {"configurable": {"thread_id": thread_id}}
@@ -619,6 +695,7 @@ async def resume_content_creation(
     approved: bool,
     selected_draft_id: int | None = None,
     user_edited_content: str | None = None,
+    db: AsyncSession | None = None,
     checkpointer: PostgresSaver | None = None,
 ) -> dict[str, Any]:
     """Resume a paused content creation workflow.
@@ -628,26 +705,37 @@ async def resume_content_creation(
         approved: Whether user approved
         selected_draft_id: Selected variant number (if any)
         user_edited_content: User's custom content (if any)
-        checkpointer: Graph checkpointer
+        db: Database session (required)
+        checkpointer: Graph checkpointer (required)
         
     Returns:
         Updated state after resume
     """
     if not checkpointer:
         raise ValueError("Checkpointer required for resume")
+    if not db:
+        raise ValueError("Database session required for resume")
     
     config = {"configurable": {"thread_id": thread_id}}
     
     # Get current state
-    graph = build_content_creation_graph(checkpointer)
+    graph = build_content_creation_graph(checkpointer, db)
     current_state = await graph.aget_state(config)
     
     if not current_state:
         raise ValueError(f"No state found for thread_id: {thread_id}")
     
+    # We need to know which node we are resuming from.
+    status = current_state.values.get("status")
+    if status == "awaiting_selection":
+        as_node = "interrupt_for_selection"
+    elif status == "awaiting_final_approval":
+        as_node = "final_approval_interrupt"
+    else:
+        raise ValueError(f"Cannot resume from status: {status}")
+        
     # Update state with user response
-    updated_state = dict(current_state.values)
-    updated_state["approved"] = approved
+    updated_state = {"approved": approved, "updated_at": datetime.utcnow()}
     
     if selected_draft_id is not None:
         updated_state["selected_draft_id"] = selected_draft_id
@@ -655,11 +743,12 @@ async def resume_content_creation(
     if user_edited_content:
         updated_state["user_edited_content"] = user_edited_content
     
-    updated_state["updated_at"] = datetime.utcnow()
+    # Force LangGraph to treat this state update as if it came from the interrupt node
+    await graph.aupdate_state(config, updated_state, as_node=as_node)
     
-    # Resume execution
-    async for state in graph.astream(updated_state, config):
-        logger.info("graph_resume_update", trace_id=updated_state.get("trace_id"))
+    # Resume execution by passing None
+    async for state in graph.astream(None, config):
+        logger.info("graph_resume_update", trace_id=current_state.values.get("trace_id"))
     
     # Get final state
     final_state = await graph.aget_state(config)

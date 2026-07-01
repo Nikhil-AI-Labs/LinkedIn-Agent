@@ -1,7 +1,7 @@
 """Action/approval service orchestration layer."""
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app.agents.content_creation_agent import (
     resume_content_creation,
@@ -25,7 +25,7 @@ class ActionService:
     def __init__(
         self,
         db: AsyncSession,
-        checkpointer: PostgresSaver,
+        checkpointer: AsyncPostgresSaver,
     ):
         self.db = db
         self.checkpointer = checkpointer
@@ -34,58 +34,63 @@ class ActionService:
     
     async def get_pending_items(
         self,
-        user_id: int,
+        user_id: str,
         trace_id: str,
     ) -> dict:
         """Get all pending items for user.
         
         Args:
-            user_id: User ID
+            user_id: User ID (UUID string)
             trace_id: Trace ID for logging
             
         Returns:
             Dict with pending items list
         """
+        from uuid import UUID
+        
+        user_uuid = UUID(user_id)
         logger.info("fetching_pending_items", user_id=user_id, trace_id=trace_id)
         
         # Get pending drafts
         pending_drafts = await self.draft_repo.get_user_drafts_by_status(
-            user_id=user_id,
+            user_id=user_uuid,
             status="pending",
         )
         
         # Get pending engagements
-        pending_engagements = await self.pending_repo.get_user_pending(user_id)
+        pending_engagements = await self.pending_repo.get_pending_for_user(user_uuid)
         
         items = []
         
         # Add drafts
         for draft in pending_drafts:
             items.append({
-                "id": draft.id,
+                "id": str(draft.id),
                 "type": "draft",
-                "thread_id": draft.trace_id,  # Using trace_id as proxy for thread_id
-                "status": draft.status.value,
+                "thread_id": str(draft.graph_run_id) if draft.graph_run_id else None,
+                "status": draft.status,
                 "created_at": draft.created_at.isoformat(),
                 "data": {
-                    "brief": draft.brief,
-                    "variants": draft.variants,
+                    "idea_input": draft.idea_input,
+                    "draft_text": draft.draft_text,
+                    "variant_index": draft.variant_index,
+                    "score": draft.score,
                 },
             })
         
         # Add engagements
         for engagement in pending_engagements:
             items.append({
-                "id": engagement.id,
+                "id": str(engagement.id),
                 "type": "engagement",
-                "thread_id": engagement.trace_id,
-                "status": engagement.status.value,
+                "thread_id": str(engagement.graph_run_id) if engagement.graph_run_id else None,
+                "status": engagement.status,
                 "created_at": engagement.created_at.isoformat(),
                 "data": {
-                    "post_id": engagement.post_id,
-                    "engagement_type": engagement.engagement_type.value,
-                    "suggested_content": engagement.suggested_content,
-                    "priority": engagement.priority,
+                    "source_post_url": engagement.source_post_url,
+                    "action_type": engagement.action_type,
+                    "suggested_text": engagement.suggested_text,
+                    "source_type": engagement.source_type,
                 },
             })
         
@@ -106,7 +111,7 @@ class ActionService:
     async def select_draft(
         self,
         thread_id: str,
-        selected_draft_id: int | None,
+        selected_draft_id: str | None,  # Now accepts string
         user_edited_content: str | None,
         trace_id: str,
     ) -> dict:
@@ -114,7 +119,7 @@ class ActionService:
         
         Args:
             thread_id: Thread ID
-            selected_draft_id: Selected draft variant number
+            selected_draft_id: Selected draft variant number or ID (as string)
             user_edited_content: User's custom edited content
             trace_id: Trace ID for logging
             
@@ -130,12 +135,33 @@ class ActionService:
         )
         
         try:
+            # Parse draft ID - extract variant number from frontend ID like "draft-1782659708840"
+            variant_number = None
+            if selected_draft_id:
+                # Try to extract variant number from the string
+                # Frontend sends IDs like "draft-{timestamp}" where timestamp encodes variant
+                if selected_draft_id.startswith("draft-"):
+                    # Extract timestamp and convert to variant (1, 2, or 3)
+                    try:
+                        timestamp_str = selected_draft_id.split("-")[1]
+                        # Use last digit to determine variant (1-3)
+                        variant_number = (int(timestamp_str) % 3) + 1
+                    except (IndexError, ValueError):
+                        variant_number = 1  # Default to first variant
+                else:
+                    # Direct variant number
+                    try:
+                        variant_number = int(selected_draft_id)
+                    except ValueError:
+                        variant_number = 1  # Default to first variant
+            
             # Resume content creation agent with user selection
             final_state = await resume_content_creation(
                 thread_id=thread_id,
                 approved=True,  # User is approving draft selection step
-                selected_draft_id=selected_draft_id,
+                selected_draft_id=variant_number,
                 user_edited_content=user_edited_content,
+                db=self.db,
                 checkpointer=self.checkpointer,
             )
             
@@ -199,6 +225,7 @@ class ActionService:
             final_state = await resume_content_creation(
                 thread_id=thread_id,
                 approved=True,
+                db=self.db,
                 checkpointer=self.checkpointer,
             )
             

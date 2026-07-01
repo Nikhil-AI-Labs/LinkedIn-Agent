@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app.services.intent_router import classify_intent, IntentResult
 from app.services.llm import llm_manager, LLMTask, LLMMessage
@@ -25,7 +25,7 @@ class ChatService:
     def __init__(
         self,
         db: AsyncSession,
-        checkpointer: PostgresSaver,
+        checkpointer: AsyncPostgresSaver,
     ):
         self.db = db
         self.checkpointer = checkpointer
@@ -33,18 +33,22 @@ class ChatService:
     
     async def process_message(
         self,
-        user_id: int,
+        user_id: str,
         message: str,
         thread_id: str | None,
         trace_id: str,
+        language: str | None = None,
+        source_mode: str = "text",
     ) -> dict:
         """Process a chat message and route to appropriate handler.
         
         Args:
-            user_id: User ID
+            user_id: User ID (UUID string)
             message: User message text
             thread_id: Optional existing thread ID
             trace_id: Trace ID for logging
+            language: Message language (en, hi, hinglish)
+            source_mode: Source mode (text, voice)
             
         Returns:
             Response dict with intent, status, thread_id, trace_id, data
@@ -71,6 +75,8 @@ class ChatService:
             role="user",
             content=message,
             trace_id=trace_id,
+            language=language,
+            source_mode=source_mode,
         )
         
         # Classify intent
@@ -133,13 +139,15 @@ class ChatService:
                 content=response["message"],
                 intent=intent_result.intent,
                 trace_id=trace_id,
+                language=language,
+                source_mode=source_mode,
             )
         
         return response
     
     async def _handle_create_post(
         self,
-        user_id: int,
+        user_id: str,
         message: str,
         thread_id: str,
         trace_id: str,
@@ -173,15 +181,18 @@ class ChatService:
     
     async def _handle_view_pending(
         self,
-        user_id: int,
+        user_id: str,
         thread_id: str,
         trace_id: str,
     ) -> dict:
         """Handle viewing pending actions."""
+        from uuid import UUID
+        
+        user_uuid = UUID(user_id)
         pending_repo = PendingEngagementRepository(self.db)
         
         # Get pending engagements
-        pending_items = await pending_repo.get_user_pending(user_id)
+        pending_items = await pending_repo.get_pending_for_user(user_uuid)
         
         return {
             "intent": "view_pending",
@@ -192,11 +203,11 @@ class ChatService:
             "data": {
                 "pending_actions": [
                     {
-                        "id": item.id,
-                        "post_id": item.post_id,
-                        "type": item.engagement_type.value,
-                        "suggested_content": item.suggested_content,
-                        "priority": item.priority,
+                        "id": str(item.id),
+                        "source_post_url": item.source_post_url,
+                        "action_type": item.action_type,
+                        "suggested_text": item.suggested_text,
+                        "source_type": item.source_type,
                         "created_at": item.created_at.isoformat(),
                     }
                     for item in pending_items
@@ -207,7 +218,7 @@ class ChatService:
     
     async def _handle_list_watchlist(
         self,
-        user_id: int,
+        user_id: str,
         thread_id: str,
         trace_id: str,
     ) -> dict:
@@ -215,7 +226,7 @@ class ChatService:
         watchlist_repo = WatchlistRepository(self.db)
         
         # Get watchlist entries
-        entries = await watchlist_repo.get_user_watchlist(user_id)
+        entries = await watchlist_repo.get_for_user(user_id)
         
         return {
             "intent": "list_watchlist",
@@ -238,7 +249,7 @@ class ChatService:
     
     async def _handle_general_query(
         self,
-        user_id: int,
+        user_id: str,
         message: str,
         thread_id: str,
         trace_id: str,
@@ -258,7 +269,7 @@ class ChatService:
             messages.append(
                 LLMMessage(
                     role=msg.role,
-                    content=msg.content,
+                    content=msg.message_text,
                 )
             )
         
@@ -271,16 +282,22 @@ class ChatService:
             0,
             LLMMessage(
                 role="system",
-                content="You are a helpful LinkedIn AI assistant. Provide concise, professional responses.",
+                content=(
+                    "You are a helpful LinkedIn AI assistant. "
+                    "Provide direct, conversational responses without showing your reasoning. "
+                    "Do not include phrases like 'Analyze', 'Identify', 'Brainstorm', or numbered thinking steps. "
+                    "Simply give the final answer as if speaking naturally to the user. "
+                    "Keep responses brief and under 50 words for greetings, under 100 words for other queries."
+                ),
             ),
         )
         
-        # Call primary LLM
+        # Call primary LLM with reduced token limit for concise responses
         response = await llm_manager.call(
-            task=LLMTask.GENERAL_RESPONSE,
+            task=LLMTask.GENERAL_QUERY,
             messages=messages,
             temperature=0.7,
-            max_tokens=500,
+            max_tokens=150,  # Reduced from 500 for more concise responses
             trace_id=trace_id,
         )
         

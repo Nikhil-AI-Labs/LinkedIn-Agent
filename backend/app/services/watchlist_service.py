@@ -210,7 +210,7 @@ class WatchlistService:
         )
         
         # Get all watchlist entries
-        entries = await self.watchlist_repo.get_user_watchlist(user_id)
+        entries = await self.watchlist_repo.get_for_user(user_id)
         
         profiles = [
             {

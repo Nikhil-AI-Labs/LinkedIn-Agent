@@ -27,7 +27,7 @@ class DraftRepository:
     async def create(
         self,
         user_id: UUID,
-        graph_run_id: UUID | None,
+        graph_run_id: str | None,
         idea_input: str,
         draft_text: str,
         variant_index: int = 0,
@@ -38,7 +38,7 @@ class DraftRepository:
 
         Args:
             user_id: User UUID
-            graph_run_id: Optional graph run UUID
+            graph_run_id: Optional LangGraph thread_id string
             idea_input: Original user idea
             draft_text: Generated draft text
             variant_index: Draft variant number (0, 1, 2)
@@ -83,11 +83,11 @@ class DraftRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_graph_run_id(self, graph_run_id: UUID) -> list[PostDraft]:
+    async def get_by_graph_run_id(self, graph_run_id: str) -> list[PostDraft]:
         """Get all drafts for a graph run (typically 2-3 variants).
 
         Args:
-            graph_run_id: Graph run UUID
+            graph_run_id: LangGraph thread_id string
 
         Returns:
             List of PostDraft instances
@@ -114,6 +114,37 @@ class DraftRepository:
             .where(
                 PostDraft.user_id == user_id,
                 PostDraft.status.in_([DraftStatus.DRAFTED.value, DraftStatus.APPROVED.value]),
+            )
+            .order_by(PostDraft.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+    
+    async def get_user_drafts_by_status(
+        self, user_id: UUID, status: str, limit: int = 50
+    ) -> list[PostDraft]:
+        """Get user's drafts filtered by status.
+        
+        This is an alias method for backwards compatibility.
+        
+        Args:
+            user_id: User UUID
+            status: Status to filter by (ignored if "pending", uses DRAFTED/APPROVED)
+            limit: Maximum number of drafts to return
+            
+        Returns:
+            List of PostDraft instances
+        """
+        # "pending" maps to DRAFTED and APPROVED statuses
+        if status == "pending":
+            return await self.get_pending_for_user(user_id, limit=limit)
+        
+        # Otherwise filter by exact status
+        result = await self.session.execute(
+            select(PostDraft)
+            .where(
+                PostDraft.user_id == user_id,
+                PostDraft.status == status,
             )
             .order_by(PostDraft.created_at.desc())
             .limit(limit)
