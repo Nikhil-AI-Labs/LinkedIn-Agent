@@ -1,8 +1,9 @@
 # Environment variables
 .env
 .env.local
+.env.example
 .env.*.local
-
+QUICK_START.md
 # Python
 __pycache__/
 *.py[cod]

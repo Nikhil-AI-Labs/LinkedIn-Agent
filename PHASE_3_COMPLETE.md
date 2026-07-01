@@ -234,8 +234,8 @@ These are for Phase 4 (LinkedIn Integration):
 ### 1. API Keys Required
 Your `.env` must have:
 ```bash
-SARVAM_API_KEY=sk_l2o5v7ir_5tIIpIq3ohr3uePRYMOiUZeZ
-GROQ_API_KEY=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
+SARVAM_API_KEY=your_sarvam_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
 ```
 (You already have these - confirmed)
 
