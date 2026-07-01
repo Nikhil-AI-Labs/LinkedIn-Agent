@@ -48,7 +48,7 @@ frontend/.next/
 frontend/out/
 frontend/node_modules/
 frontend/.pnp
-frontend/.pnp.js
+# frontend/.pnp.js
 
 # Node
 node_modules/
