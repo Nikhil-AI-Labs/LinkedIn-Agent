@@ -29,7 +29,6 @@ MANIFEST
 venv/
 env/
 ENV/
-frontend/
 # FastAPI / Uvicorn
 .pytest_cache/
 .coverage
